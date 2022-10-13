@@ -116,8 +116,9 @@
     ```
     rpcinfo -p | grep nfs
     ```
+    ![Opening NFS Ports](images/003-nfs-ports-prcinfo.png)
 - In EC2, open ports `TCP 111`, `UDP 111`, and `UDP 2049` to allow NFS server to be accessible from client.
-    ![Opening NFS Ports](images/003-nfs-ports.png)
+    ![Opening NFS Ports](images/004-nfs-ports.png)
 
 
 
@@ -131,7 +132,7 @@
     ```
     sudo apt install mysql-server
     ``` 
-- Open port `3306` on `mysql-server` by adding inbound rule in EC2. Allow access only to `mysql-client`.
+- Open port `3306` on `dbserver` by adding inbound rule in EC2. Allow access only to `172.31.80.0/20`.
 - Set root user password: 
     ```
     ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY 'DeFPassyWord_1';
@@ -166,3 +167,87 @@
     ```
     CREATE USER IF NOT EXISTS 'webaccess'@'172.31.80.0/20' IDENTIFIED WITH mysql_native_password BY 'mypass001' DEFAULT ROLE webservers;
     ```
+- Edit the `mysqld.cnf` to configure MySQL to allow incoming remote connections:
+    ```
+    sudo vi /etc/mysql/mysql.conf.d/mysqld.cnf
+    ```
+- Find and change the `bind-address` value from `127.0.0.1` to `0.0.0.0`
+
+
+
+## Configure 3 Webservers
+
+- Launch 3 new EC2 instances named `webserver1`, `webserver2`, and `webserver3`
+### On each of the webservers:
+- Install NFS client:
+    ```
+    sudo yum install nfs-utils nfs4-acl-tools -y
+    ```
+- Mount `/var/www/` and target NFS server's exports for apps:
+    ```
+    sudo mkdir /var/www
+    sudo mount -t nfs -o rw,nosuid 172.31.82.144:/mnt/apps /var/www
+    ```
+- Verify successful mount of NFS on `/var/www/` with `df -h`
+    ![NFS App LV Mounted](images/005-webserver-nfs-app-mnt.png)
+- Edit `fstab` to ensure mount persists after reboot:
+    ```
+    sudo vi /etc/fstab
+    ```
+- Add the following:
+    ```
+    172.31.82.144:/mnt/apps /var/www nfs defaults 0 0
+    ```
+- Add [Remi's Repository](http://www.servermom.org/how-to-enable-remi-repo-on-centos-7-6-and-5/2790/) with Apache and PHP:
+    ```
+    sudo yum install httpd -y
+    sudo dnf install https://dl.fedoraproject.org/pub/epel/epel-release-latest-8.noarch.rpm
+    sudo dnf install dnf-utils http://rpms.remirepo.net/enterprise/remi-release-8.rpm
+    sudo dnf module reset php
+    sudo dnf module enable php:remi-7.4
+    sudo dnf install php php-opcache php-gd php-curl php-mysqlnd
+    sudo systemctl start php-fpm
+    sudo systemctl enable php-fpm
+    sudo setsebool -P httpd_execmem 1
+    ```
+
+*Verify that Apache files and directories are available on the Web Server in `/var/www` and also on the NFS server in `/mnt/apps`. If you see the same files – it means NFS is mounted correctly. You can try to create a new file touch `test.txt` from one server and check if the same file is accessible from other Web Servers.*
+
+- Mount `/var/log/httpd` and target NFS server's exports for logs:
+    ```
+    sudo mount -t nfs -o rw,nosuid 172.31.82.144:/mnt/logs /var/log/httpd
+    ```
+- Verify successful mount of NFS with `df -h`
+- Edit `fstab` to ensure mount persists after reboot:
+    ```
+    sudo vi /etc/fstab
+    ```
+- Add the following:
+    ```
+    172.31.82.144:/mnt/logs /var/log/httpd nfs defaults 0 0
+    ```
+
+### On one webserver (anyone of the 3):
+- Clone the `mrdankuta/pbl7-tooling` repo (*forked from `darey-io/tooling`*) and copy all contents of the `html` folder into `/var/www/html/`
+- In EC2 open `port 80` on the webservers
+    ![Webserver HTTP Access](images/007-webserver-port-80-working.png)
+- Connect app to database by inserting access details in `/var/www/html/functions.php`
+- Install MYSQL client on webserver:
+    ```
+    sudo yum install mysql
+    ```
+- Import the `tooling-db.sql` file in `pb7-tooling` folder into the `tooling` database:
+    ```
+    mysql -h 172.31.81.210 -u webaccess -p tooling < tooling-db.sql
+    ```
+- Connect remotely to the database server and create a new user:
+    ```
+    mysql -h 172.31.81.210 -u webaccess -p
+
+    USE tooling;
+
+    INSERT INTO users (username, password, email, user_type, status) VALUES ("myuser3", "pass", "userer@mail.com", "admin", 1);
+    ```
+    ![Remote DB insert](images/008-remote-insert.png)
+- Open website on `webserver-ip` and login
+    ![Login Success](images/009-login-success.png)
