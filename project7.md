@@ -247,6 +247,9 @@
     <nfs-server-private-ip>:/mnt/logs /var/log/httpd nfs defaults 0 0
     ```
 
+*Note 2: If you encounter 403 Error – check permissions to your `/var/www/html` folder and also disable SELinux `sudo setenforce 0`
+To make this change permanent – open following config file `sudo vi /etc/sysconfig/selinux` and set `SELINUX=disabled` then restart httpd.*
+
 ### On one webserver (anyone of the 3):
 - Clone the [mrdankuta/pbl7-tooling](https://github.com/mrdankuta/pbl7-tooling.git) repo (*forked from `darey-io/tooling`*) and copy all contents of the `html` folder into `/var/www/html/`
 - In EC2 open `port 80` on the webservers
