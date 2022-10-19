@@ -4,7 +4,7 @@
 
 ## Step 1 - Setup NFS Server
 
-- Launch a new EC2 instance `nfs-server`
+- Launch a new EC2 instance `nfs-server` with RHEL Linux 8 Operating System
 - Create 3 Volumes of 10GB each within the same Availability Zone as the previously created instance
 - Attach each volume to the `nfs-server` instance
 - Connect to `nfs-server` instance via terminal
@@ -12,6 +12,8 @@
 - Create a single partition on each attached disks using the `gdisk` utility:
     ```
     sudo gdisk /dev/xvd[f,g,h]
+    n
+    8E00
     ```
 - Use `lsblk` to view devices and new partitions
 - Install `lvm2` package:
@@ -34,7 +36,7 @@
     ```
 - Add all 3 physical volumes to a volume group called `nfs-vg`:
     ```
-    sudo vgcreate webdata-vg /dev/xvdf1 /dev/xvdg1 /dev/xvdh1
+    sudo vgcreate nfsdata-vg /dev/xvdf1 /dev/xvdg1 /dev/xvdh1
     ```
 - Use the `vgs` command to verify and view newly created volume group:
     ```
@@ -42,9 +44,9 @@
     ```
 - Create three logical volumes using the `lvcreate` utility. Create `lv-apps` (to be used by webservers), `lv-logs` (to be used by webserver logs), and `lv-opt` (to be used by Jenkins server).
     ```
-    sudo lvcreate -n lv-apps -L 10G nfs-vg
-    sudo lvcreate -n lv-logs -L 10G nfs-vg
-    sudo lvcreate -n lv-opt -L 9G nfs-vg
+    sudo lvcreate -n lv-apps -L 10G nfsdata-vg
+    sudo lvcreate -n lv-logs -L 10G nfsdata-vg
+    sudo lvcreate -n lv-opt -L 9G nfsdata-vg
     ```
 - Use the `lvs` command to verify and view newly created logical volumes:
     ```
@@ -57,9 +59,9 @@
     ```
 - Format logical volumes with `xfs` filesystem:
     ```
-    sudo mkfs -t xfs /dev/nfs-vg/lv-apps
-    sudo mkfs -t xfs /dev/nfs-vg/lv-logs
-    sudo mkfs -t xfs /dev/nfs-vg/lv-opt
+    sudo mkfs -t xfs /dev/nfsdata-vg/lv-apps
+    sudo mkfs -t xfs /dev/nfsdata-vg/lv-logs
+    sudo mkfs -t xfs /dev/nfsdata-vg/lv-opt
     ```
     ![XFS Formating](./images/001-mkfs-formated.png)
 - Create directories for logical volumes mount points:
@@ -70,10 +72,23 @@
     ```
 - Mount `lv-apps` on `/mnt/apps`, `lv-logs` on `/mnt/logs`, and `lv-opt` on `/mnt/opt`:
     ```
-    sudo mount /dev/nfs-vg/lv-apps /mnt/apps/
-    sudo mount /dev/nfs-vg/lv-logs /mnt/logs/
-    sudo mount /dev/nfs-vg/lv-opt /mnt/opt/
+    sudo mount /dev/nfsdata-vg/lv-apps /mnt/apps/
+    sudo mount /dev/nfsdata-vg/lv-logs /mnt/logs/
+    sudo mount /dev/nfsdata-vg/lv-opt /mnt/opt/
     ```
+### Update `/etc/fstab` file to ensure mount configuration persists after restart of the server
+
+- Copy out device UUID of `lv-apps`, `lv-logs` and `lv-opt` using `sudo blkid` to display them
+- Edit and update `fstab` file. Insert UUID of mounted LVs (remember to remove leading and ending quotes):
+    ```
+    sudo vi /etc/fstab
+    ```
+- Test configurations and reload daemon:
+    ```
+    sudo mount -a
+    sudo systemctl daemon-reload
+    ```
+- Verify and view devices setup by using `df -h`
 - Install NFS server:
     ```
     sudo yum -y update
@@ -103,9 +118,9 @@
     ```
 - Insert the following code:
     ```
-    /mnt/apps 172.31.80.0/20(rw,sync,no_all_squash,no_root_squash)
-    /mnt/logs 172.31.80.0/20(rw,sync,no_all_squash,no_root_squash)
-    /mnt/opt 172.31.80.0/20(rw,sync,no_all_squash,no_root_squash)
+    /mnt/apps <subnet-CIDR>(rw,sync,no_all_squash,no_root_squash)
+    /mnt/logs <subnet-CIDR>(rw,sync,no_all_squash,no_root_squash)
+    /mnt/opt <subnet-CIDR>(rw,sync,no_all_squash,no_root_squash)
     ```
 - Export:
     ```
@@ -132,9 +147,10 @@
     ```
     sudo apt install mysql-server
     ``` 
-- Open port `3306` on `dbserver` by adding inbound rule in EC2. Allow access only to `172.31.80.0/20`.
+- Open port `3306` on `dbserver` by adding inbound rule in EC2. Allow access only to `subnet-CIDR`.
 - Set root user password: 
     ```
+    sudo mysql
     ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY 'DeFPassyWord_1';
     ```
 - Exit MySQL Shell: 
@@ -156,7 +172,7 @@
     ```
 - Create a new database:
     ```
-    CREATE DATABASE 'tooling';
+    CREATE DATABASE tooling;
     ```
 - Assign privileges to `tooling` for `webservers` role:
     ```
@@ -165,7 +181,11 @@
     ```
 - Create new user and assign `webservers` role:
     ```
-    CREATE USER IF NOT EXISTS 'webaccess'@'172.31.80.0/20' IDENTIFIED WITH mysql_native_password BY 'mypass001' DEFAULT ROLE webservers;
+    CREATE USER IF NOT EXISTS 'webaccess'@'<subnet-CIDR>' IDENTIFIED WITH mysql_native_password BY 'mypass001' DEFAULT ROLE webservers;
+    ```
+- Exit the MYSQL console:
+    ```
+    exit
     ```
 - Edit the `mysqld.cnf` to configure MySQL to allow incoming remote connections:
     ```
@@ -186,7 +206,7 @@
 - Mount `/var/www/` and target NFS server's exports for apps:
     ```
     sudo mkdir /var/www
-    sudo mount -t nfs -o rw,nosuid 172.31.82.144:/mnt/apps /var/www
+    sudo mount -t nfs -o rw,nosuid <nfs-server-private-ip>:/mnt/apps /var/www
     ```
 - Verify successful mount of NFS on `/var/www/` with `df -h`
     ![NFS App LV Mounted](images/005-webserver-nfs-app-mnt.png)
@@ -196,16 +216,16 @@
     ```
 - Add the following:
     ```
-    172.31.82.144:/mnt/apps /var/www nfs defaults 0 0
+    <nfs-server-private-ip>:/mnt/apps /var/www nfs defaults 0 0
     ```
 - Add [Remi's Repository](http://www.servermom.org/how-to-enable-remi-repo-on-centos-7-6-and-5/2790/) with Apache and PHP:
     ```
     sudo yum install httpd -y
-    sudo dnf install https://dl.fedoraproject.org/pub/epel/epel-release-latest-8.noarch.rpm
-    sudo dnf install dnf-utils http://rpms.remirepo.net/enterprise/remi-release-8.rpm
-    sudo dnf module reset php
-    sudo dnf module enable php:remi-7.4
-    sudo dnf install php php-opcache php-gd php-curl php-mysqlnd
+    sudo dnf install https://dl.fedoraproject.org/pub/epel/epel-release-latest-8.noarch.rpm -y
+    sudo dnf install dnf-utils http://rpms.remirepo.net/enterprise/remi-release-8.rpm -y
+    sudo dnf module reset php -y
+    sudo dnf module enable php:remi-7.4 -y
+    sudo dnf install php php-opcache php-gd php-curl php-mysqlnd -y
     sudo systemctl start php-fpm
     sudo systemctl enable php-fpm
     sudo setsebool -P httpd_execmem 1
@@ -215,7 +235,7 @@
 
 - Mount `/var/log/httpd` and target NFS server's exports for logs:
     ```
-    sudo mount -t nfs -o rw,nosuid 172.31.82.144:/mnt/logs /var/log/httpd
+    sudo mount -t nfs -o rw,nosuid <nfs-server-private-ip>:/mnt/logs /var/log/httpd
     ```
 - Verify successful mount of NFS with `df -h`
 - Edit `fstab` to ensure mount persists after reboot:
@@ -224,25 +244,25 @@
     ```
 - Add the following:
     ```
-    172.31.82.144:/mnt/logs /var/log/httpd nfs defaults 0 0
+    <nfs-server-private-ip>:/mnt/logs /var/log/httpd nfs defaults 0 0
     ```
 
 ### On one webserver (anyone of the 3):
-- Clone the `mrdankuta/pbl7-tooling` repo (*forked from `darey-io/tooling`*) and copy all contents of the `html` folder into `/var/www/html/`
+- Clone the [mrdankuta/pbl7-tooling](https://github.com/mrdankuta/pbl7-tooling.git) repo (*forked from `darey-io/tooling`*) and copy all contents of the `html` folder into `/var/www/html/`
 - In EC2 open `port 80` on the webservers
     ![Webserver HTTP Access](images/007-webserver-port-80-working.png)
 - Connect app to database by inserting access details in `/var/www/html/functions.php`
 - Install MYSQL client on webserver:
     ```
-    sudo yum install mysql
+    sudo yum install mysql -y
     ```
 - Import the `tooling-db.sql` file in `pb7-tooling` folder into the `tooling` database:
     ```
-    mysql -h 172.31.81.210 -u webaccess -p tooling < tooling-db.sql
+    mysql -h <db-server-private-ip> -u webaccess -p tooling < tooling-db.sql
     ```
 - Connect remotely to the database server and create a new user:
     ```
-    mysql -h 172.31.81.210 -u webaccess -p
+    mysql -h <db-server-private-ip> -u webaccess -p
 
     USE tooling;
 
